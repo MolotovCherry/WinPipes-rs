@@ -10,8 +10,8 @@ use windows::{
     core::{Error, PCWSTR},
     Win32::{
         Foundation::{
-            CloseHandle, GetLastError, ERROR_IO_PENDING, ERROR_PIPE_CONNECTED, GENERIC_READ,
-            GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+            CloseHandle, GetLastError, ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, HANDLE,
+            INVALID_HANDLE_VALUE,
         },
         Security::SECURITY_ATTRIBUTES,
         Storage::FileSystem::{
@@ -48,7 +48,7 @@ enum PipeWriteMode {
 
 #[derive(Debug, Clone)]
 pub struct NamedPipeServerOptions {
-    name: Option<Vec<u16>>,
+    name: Vec<u16>,
     open_mode: u32,
     pipe_mode: u32,
     max_instances: NonZeroU32,
@@ -63,41 +63,17 @@ pub struct NamedPipeServerOptions {
 unsafe impl Sync for NamedPipeServerOptions {}
 unsafe impl Send for NamedPipeServerOptions {}
 
-impl Default for NamedPipeServerOptions {
-    fn default() -> Self {
-        Self {
-            name: Default::default(),
-            open_mode: Default::default(),
-            // byte mode is default
-            // despite the normal default, remote clients are rejected by default for security reasons
-            pipe_mode: PIPE_TYPE_BYTE.0
-                | PIPE_READMODE_BYTE.0
-                | PIPE_WAIT.0
-                | PIPE_REJECT_REMOTE_CLIENTS.0,
-            max_instances: NonZeroU32::new(1).unwrap(),
-            out_buffer_size: Default::default(),
-            in_buffer_size: Default::default(),
-            default_timeout: Default::default(),
-            security_attributes: Default::default(),
-            read_mode: PipeReadMode::ReadByte,
-            write_mode: PipeWriteMode::WriteByte,
-        }
-    }
-}
-
 impl NamedPipeServerOptions {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// The unique pipe name. This string must have the following form:
+    /// Create named pipe server options
+    ///
+    /// The pipe name must have the following form:
     ///
     /// \\.\pipe\pipename
     ///
     /// The pipename part of the name can include any character other than a backslash, including
     /// numbers and special characters. The entire pipe name string can be up to 256 characters long.
     /// Pipe names are not case sensitive.
-    pub fn name(mut self, name: impl AsRef<str>) -> Self {
+    pub fn new(name: impl AsRef<str>) -> Self {
         let name = name.as_ref();
 
         assert!(
@@ -119,8 +95,23 @@ impl NamedPipeServerOptions {
         let mut name = name.encode_utf16().collect::<Vec<_>>();
         name.push(b'\0' as u16);
 
-        self.name = Some(name);
-        self
+        NamedPipeServerOptions {
+            name,
+            open_mode: Default::default(),
+            // byte mode is default
+            // despite the normal default, remote clients are rejected by default for security reasons
+            pipe_mode: PIPE_TYPE_BYTE.0
+                | PIPE_READMODE_BYTE.0
+                | PIPE_WAIT.0
+                | PIPE_REJECT_REMOTE_CLIENTS.0,
+            max_instances: NonZeroU32::new(1).unwrap(),
+            out_buffer_size: Default::default(),
+            in_buffer_size: Default::default(),
+            default_timeout: Default::default(),
+            security_attributes: Default::default(),
+            read_mode: PipeReadMode::ReadByte,
+            write_mode: PipeWriteMode::WriteByte,
+        }
     }
 
     /// The pipe is bi-directional; both server and client processes can read from and write
@@ -326,11 +317,9 @@ impl NamedPipeServerOptions {
 
     /// Create the pipeserver
     pub fn create(self) -> Result<NamedPipeServer, Error> {
-        assert!(self.name.is_some(), "pipe name not provided");
-
         let handle = unsafe {
             CreateNamedPipeW(
-                PCWSTR(self.name.as_ref().unwrap().as_ptr()),
+                PCWSTR(self.name.as_ptr()),
                 FILE_FLAGS_AND_ATTRIBUTES(self.open_mode),
                 NAMED_PIPE_MODE(self.pipe_mode),
                 self.max_instances.get(),
@@ -389,6 +378,7 @@ impl NamedPipeServer {
         Ok(())
     }
 
+    /// Incoming clients (sync version)
     pub fn incoming(&self) -> IncomingClients {
         IncomingClients { server: self }
     }
@@ -439,7 +429,7 @@ impl<'a> Iterator for IncomingClients<'a> {
         if let Err(e) = err {
             let code = (e.code().0 & 0x0000FFFF) as u32;
 
-            let is_success = code == ERROR_PIPE_CONNECTED.0 || code == ERROR_IO_PENDING.0;
+            let is_success = code == ERROR_PIPE_CONNECTED.0;
 
             if !is_success {
                 debug!("IncomingClients::next() returned: {e}");
@@ -463,8 +453,9 @@ pub struct ConnectedClient<'server> {
     server: &'server NamedPipeServer,
 }
 
-impl ConnectedClient<'_> {
-    /// How many total bytes are available to be read
+impl<'a> ConnectedClient<'a> {
+    /// How many bytes are available to be read
+    ///
     /// In msg mode returns how many bytes left for a particular message
     /// In bytes mode returns how many are left total
     pub fn available_bytes(&self) -> Result<u32, Error> {
@@ -503,25 +494,30 @@ impl ConnectedClient<'_> {
         Ok(available)
     }
 
-    /// Read all available data into a vec
-    pub fn read_vec(&self) -> Result<Vec<u8>, Error> {
+    /// Iterator over full messages/bytes into a vec
+    pub fn iter_full(&self) -> FullReaderIterator {
+        FullReaderIterator(self)
+    }
+
+    /// Read full message/bytes into a vec
+    pub fn read_full(&self) -> Result<Vec<u8>, Error> {
         let available_data = self.available_bytes()?;
 
         let mut buffer: Vec<u8> = Vec::with_capacity(available_data as usize);
 
         let mut read_bytes = 0;
 
-        let ret = unsafe {
+        let success = unsafe {
             ReadFileSys(
                 self.server.handle.0,
                 buffer.as_mut_ptr() as *mut _,
                 available_data,
                 &mut read_bytes,
                 std::ptr::null_mut(),
-            )
+            ) != 0
         };
 
-        if ret == 0 {
+        if !success {
             return Err(unsafe { GetLastError().unwrap_err() });
         }
 
@@ -578,9 +574,23 @@ impl Write for ConnectedClient<'_> {
     }
 }
 
+pub struct FullReaderIterator<'a>(&'a ConnectedClient<'a>);
+
+impl<'a> Iterator for FullReaderIterator<'a> {
+    type Item = Vec<u8>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let Ok(item) = self.0.read_full() else {
+            return None;
+        };
+
+        Some(item)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NamedPipeClientOptions {
-    name: Option<Vec<u16>>,
+    name: Vec<u16>,
     open_mode: u32,
     pipe_mode: u32,
     collection_data_timeout: Option<u32>,
@@ -589,34 +599,17 @@ pub struct NamedPipeClientOptions {
     security_attributes: Option<*const SECURITY_ATTRIBUTES>,
 }
 
-impl Default for NamedPipeClientOptions {
-    fn default() -> Self {
-        Self {
-            name: Default::default(),
-            open_mode: Default::default(),
-            // byte mode is default
-            pipe_mode: PIPE_READMODE_BYTE.0 | PIPE_WAIT.0,
-            collection_data_timeout: Default::default(),
-            file_flags: Default::default(),
-            security_attributes: Default::default(),
-            max_collection_count: Default::default(),
-        }
-    }
-}
-
 impl NamedPipeClientOptions {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// The unique pipe name. This string must have the following form:
+    /// Create a new named pipe client options
+    ///
+    /// The pipe name must have the following form:
     ///
     /// \\.\pipe\pipename
     ///
     /// The pipename part of the name can include any character other than a backslash, including
     /// numbers and special characters. The entire pipe name string can be up to 256 characters long.
     /// Pipe names are not case sensitive.
-    pub fn name(mut self, name: impl AsRef<str>) -> Self {
+    pub fn new(name: impl AsRef<str>) -> Self {
         let name = name.as_ref();
 
         assert!(
@@ -638,9 +631,16 @@ impl NamedPipeClientOptions {
         let mut name = name.encode_utf16().collect::<Vec<_>>();
         name.push(b'\0' as u16);
 
-        self.name = Some(name);
-
-        self
+        NamedPipeClientOptions {
+            name,
+            open_mode: Default::default(),
+            // byte mode is default
+            pipe_mode: PIPE_READMODE_BYTE.0 | PIPE_WAIT.0,
+            collection_data_timeout: Default::default(),
+            file_flags: Default::default(),
+            security_attributes: Default::default(),
+            max_collection_count: Default::default(),
+        }
     }
 
     /// The pipe is bi-directional; both server and client processes can read from and write
@@ -737,11 +737,9 @@ impl NamedPipeClientOptions {
     }
 
     pub fn create(self) -> Result<NamedPipeClient, Error> {
-        assert!(self.name.is_some(), "pipe name not provided");
-
         let handle = unsafe {
             CreateFileW(
-                PCWSTR(self.name.unwrap().as_ptr()),
+                PCWSTR(self.name.as_ptr()),
                 self.open_mode,
                 FILE_SHARE_NONE,
                 self.security_attributes,
@@ -764,6 +762,7 @@ impl NamedPipeClientOptions {
     }
 }
 
+#[derive(Debug)]
 pub struct NamedPipeClient {
     handle: HANDLE,
 }
