@@ -460,13 +460,11 @@ impl<'a> Iterator for IncomingClients<'a> {
                 match code {
                     // the error isn't an error per se, but we should continue and try again
                     _ if ok_errors.contains(&code) => {
-                        _ = self.server.disconnect();
                         return Some(Err(code));
                     }
                     // some other internal error we cannot continue on
                     _ => {
                         debug!("IncomingClients::next() returned: {e}");
-                        _ = self.server.disconnect();
                         return None;
                     }
                 }
