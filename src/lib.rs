@@ -492,39 +492,39 @@ pub struct ConnectedClient<'server> {
 impl<'a> ConnectedClient<'a> {
     /// How many bytes are available to be read
     ///
-    /// In msg mode returns how many bytes left for a particular message
     /// In bytes mode returns how many are left total
     pub fn available_bytes(&self) -> Result<u32, Error> {
-        let msg_mode = self
-            .server
-            .options
-            .as_ref()
-            .is_some_and(|o| o.read_mode == PipeReadMode::ReadMsg);
-
         let mut available = 0;
 
-        if msg_mode {
-            unsafe {
-                PeekNamedPipe(
-                    self.server.handle,
-                    None,
-                    0,
-                    None,
-                    None,
-                    Some(&mut available),
-                )?;
-            }
-        } else {
-            unsafe {
-                PeekNamedPipe(
-                    self.server.handle,
-                    None,
-                    0,
-                    None,
-                    Some(&mut available),
-                    None,
-                )?;
-            }
+        unsafe {
+            PeekNamedPipe(
+                self.server.handle,
+                None,
+                0,
+                None,
+                Some(&mut available),
+                None,
+            )?;
+        }
+
+        Ok(available)
+    }
+
+    /// How many bytes are available to be read
+    ///
+    /// In msg mode returns how many bytes left for a particular message
+    pub fn available_msg_bytes(&self) -> Result<u32, Error> {
+        let mut available = 0;
+
+        unsafe {
+            PeekNamedPipe(
+                self.server.handle,
+                None,
+                0,
+                None,
+                None,
+                Some(&mut available),
+            )?;
         }
 
         Ok(available)
