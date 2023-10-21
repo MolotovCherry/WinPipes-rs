@@ -10,7 +10,8 @@ use windows::{
     core::{Error, PCWSTR},
     Win32::{
         Foundation::{
-            CloseHandle, GetLastError, ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, HANDLE,
+            CloseHandle, GetLastError, ERROR_BROKEN_PIPE, ERROR_NO_DATA, ERROR_PIPE_BUSY,
+            ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GENERIC_READ, GENERIC_WRITE, HANDLE,
             INVALID_HANDLE_VALUE,
         },
         Security::SECURITY_ATTRIBUTES,
@@ -363,19 +364,22 @@ impl NamedPipeServer {
     /// Sync version
     /// Connect to a single client
     /// See https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-connectnamedpipe
-    pub fn connect(&self) -> Result<(), Error> {
+    pub fn connect(&self) -> Result<ConnectedClient, Error> {
         unsafe { ConnectNamedPipe(self.handle, None)? };
 
-        Ok(())
+        Ok(ConnectedClient { server: self })
     }
 
     /// Async version
     /// Asynchronously connect to a single client
     /// See https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-connectnamedpipe
-    pub fn connect_overlapped(&self, overlapped: *mut OVERLAPPED) -> Result<(), Error> {
+    pub fn connect_overlapped(
+        &self,
+        overlapped: *mut OVERLAPPED,
+    ) -> Result<ConnectedClient, Error> {
         unsafe { ConnectNamedPipe(self.handle, Some(overlapped))? };
 
-        Ok(())
+        Ok(ConnectedClient { server: self })
     }
 
     /// Incoming clients (sync version)
@@ -414,32 +418,54 @@ impl Drop for NamedPipeServer {
     }
 }
 
+/// Note that the error variant is NOT an error in the sense of you cannot continue. You should just `continue` on it
+/// if there's a real error that cannot be continued on, the iterator will return None instead
 #[derive(Debug)]
 pub struct IncomingClients<'a> {
     server: &'a NamedPipeServer,
 }
 
 impl<'a> Iterator for IncomingClients<'a> {
-    type Item = ConnectedClient<'a>;
+    type Item = Result<ConnectedClient<'a>, u32>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let err = self.server.connect();
-
-        // these two are actually success
-        if let Err(e) = err {
+        let connect = self.server.connect();
+        let Ok(client) = connect else {
+            let e = connect.unwrap_err();
             let code = (e.code().0 & 0x0000FFFF) as u32;
 
             let is_success = code == ERROR_PIPE_CONNECTED.0;
 
             if !is_success {
-                debug!("IncomingClients::next() returned: {e}");
-                return None;
-            }
-        }
+                // these error codes are not errors, we can safely continue
+                let ok_errors = [
+                    // No process is on the other end of the pipe.
+                    ERROR_PIPE_NOT_CONNECTED.0,
+                    // The pipe has been ended.
+                    ERROR_BROKEN_PIPE.0,
+                    // All pipe instances are busy.
+                    ERROR_PIPE_BUSY.0,
+                    // The pipe is being closed.
+                    ERROR_NO_DATA.0,
+                ];
 
-        Some(ConnectedClient {
-            server: self.server,
-        })
+                match code {
+                    // the error isn't an error per se, but we should continue and try again
+                    _ if ok_errors.contains(&code) => return Some(Err(code)),
+                    // some other internal error we cannot continue on
+                    _ => {
+                        debug!("IncomingClients::next() returned: {e}");
+                        return None;
+                    }
+                }
+            } else {
+                return Some(Ok(ConnectedClient {
+                    server: self.server,
+                }));
+            }
+        };
+
+        Some(Ok(client))
     }
 }
 
