@@ -574,24 +574,8 @@ impl<'a> ConnectedClient<'a> {
 
         Ok(())
     }
-}
 
-impl Read for ConnectedClient<'_> {
-    /// Read into a buffer, returning how many bytes were read into it
-    /// see: https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let mut bytes_read = 0;
-
-        unsafe { ReadFile(self.server.handle, Some(buf), Some(&mut bytes_read), None)? };
-
-        Ok(bytes_read as usize)
-    }
-}
-
-impl Write for ConnectedClient<'_> {
-    /// Write into a buffer, returning how many bytes were read into it
-    /// see: https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-writefile
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    pub fn write(&self, buf: &[u8]) -> std::io::Result<usize> {
         let mut written = 0;
 
         unsafe {
@@ -601,14 +585,42 @@ impl Write for ConnectedClient<'_> {
         Ok(written as usize)
     }
 
-    /// Flushes the buffers
-    /// see: https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers
-    fn flush(&mut self) -> std::io::Result<()> {
+    fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut bytes_read = 0;
+
+        unsafe { ReadFile(self.server.handle, Some(buf), Some(&mut bytes_read), None)? };
+
+        Ok(bytes_read as usize)
+    }
+
+    fn flush(&self) -> std::io::Result<()> {
         unsafe {
             FlushFileBuffers(self.server.handle)?;
         }
 
         Ok(())
+    }
+}
+
+impl Read for ConnectedClient<'_> {
+    /// Read into a buffer, returning how many bytes were read into it
+    /// see: https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        Self::read(self, buf)
+    }
+}
+
+impl Write for ConnectedClient<'_> {
+    /// Write into a buffer, returning how many bytes were read into it
+    /// see: https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-writefile
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        Self::write(self, buf)
+    }
+
+    /// Flushes the buffers
+    /// see: https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers
+    fn flush(&mut self) -> std::io::Result<()> {
+        Self::flush(self)
     }
 }
 
