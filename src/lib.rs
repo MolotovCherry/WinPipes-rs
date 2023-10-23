@@ -494,29 +494,13 @@ pub struct ConnectedClient<'server> {
 impl<'a> ConnectedClient<'a> {
     /// How many bytes are available to be read
     ///
-    /// In bytes mode returns how many are left total
-    pub fn available_bytes(&self) -> Result<u32, Error> {
-        let mut available = 0;
-
-        unsafe {
-            PeekNamedPipe(
-                self.server.handle,
-                None,
-                0,
-                None,
-                Some(&mut available),
-                None,
-            )?;
-        }
-
-        Ok(available)
-    }
-
-    /// How many bytes are available to be read
+    /// Returns (A, L)
     ///
-    /// In msg mode returns how many bytes left for a particular message
-    pub fn available_msg_bytes(&self) -> Result<u32, Error> {
+    /// Where A: how many total bytes are available
+    /// where L: how many bytes left of this message
+    pub fn available_bytes(&self) -> Result<(u32, u32), Error> {
         let mut available = 0;
+        let mut left_message = 0;
 
         unsafe {
             PeekNamedPipe(
@@ -524,12 +508,12 @@ impl<'a> ConnectedClient<'a> {
                 None,
                 0,
                 None,
-                None,
                 Some(&mut available),
+                Some(&mut left_message),
             )?;
         }
 
-        Ok(available)
+        Ok((available, left_message))
     }
 
     /// Iterator over full messages/bytes into a vec
@@ -539,7 +523,7 @@ impl<'a> ConnectedClient<'a> {
 
     /// Read full message/bytes into a vec
     pub fn read_full(&self) -> Result<Vec<u8>, Error> {
-        let available_data = self.available_bytes()?;
+        let (available_data, _) = self.available_bytes()?;
 
         let mut buffer: Vec<u8> = Vec::with_capacity(available_data as usize);
 
