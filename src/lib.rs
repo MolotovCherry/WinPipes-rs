@@ -67,10 +67,6 @@ unsafe impl Send for NamedPipeServerOptions {}
 impl NamedPipeServerOptions {
     /// Create named pipe server options
     ///
-    /// The pipe name must have the following form:
-    ///
-    /// \\.\pipe\pipename
-    ///
     /// The pipename part of the name can include any character other than a backslash, including
     /// numbers and special characters. The entire pipe name string can be up to 256 characters long.
     /// Pipe names are not case sensitive.
@@ -78,23 +74,20 @@ impl NamedPipeServerOptions {
         let name = name.as_ref();
 
         assert!(
-            name.starts_with(r"\\.\pipe\"),
-            r"name must start with \\.\pipe\"
+            !name.starts_with(r"\\.\pipe\"),
+            r"name must not start with \\.\pipe\"
         );
 
-        let name_stripped = name.strip_prefix(r"\\.\pipe\").unwrap_or(name);
-
+        assert!(!name.contains('\\'), "name must not contain backslash");
         assert!(
-            !name_stripped.contains('\\'),
-            "name must not contain backslash"
-        );
-        assert!(
-            !name_stripped.is_empty() && name_stripped.len() <= 256,
+            !name.is_empty() && name.len() <= 256,
             "name must not be between 1-256"
         );
 
-        let mut name = name.encode_utf16().collect::<Vec<_>>();
-        name.push(b'\0' as u16);
+        let mut name = format!(r"\\.\pipe\{name}")
+            .encode_utf16()
+            .collect::<Vec<_>>();
+        name.push(0);
 
         NamedPipeServerOptions {
             name,
@@ -636,10 +629,6 @@ pub struct NamedPipeClientOptions {
 impl NamedPipeClientOptions {
     /// Create a new named pipe client options
     ///
-    /// The pipe name must have the following form:
-    ///
-    /// \\.\pipe\pipename
-    ///
     /// The pipename part of the name can include any character other than a backslash, including
     /// numbers and special characters. The entire pipe name string can be up to 256 characters long.
     /// Pipe names are not case sensitive.
@@ -647,23 +636,20 @@ impl NamedPipeClientOptions {
         let name = name.as_ref();
 
         assert!(
-            name.starts_with(r"\\.\pipe\"),
-            r"name must start with \\.\pipe\"
+            !name.starts_with(r"\\.\pipe\"),
+            r"name must not start with \\.\pipe\"
         );
 
-        let name_stripped = name.strip_prefix(r"\\.\pipe\").unwrap_or(name);
-
+        assert!(!name.contains('\\'), "name must not contain backslash");
         assert!(
-            !name_stripped.contains('\\'),
-            "name must not contain backslash"
-        );
-        assert!(
-            !name_stripped.is_empty() && name_stripped.len() <= 256,
+            !name.is_empty() && name.len() <= 256,
             "name must not be between 1-256"
         );
 
-        let mut name = name.encode_utf16().collect::<Vec<_>>();
-        name.push(b'\0' as u16);
+        let mut name = format!(r"\\.\pipe\{name}")
+            .encode_utf16()
+            .collect::<Vec<_>>();
+        name.push(0);
 
         NamedPipeClientOptions {
             name,
