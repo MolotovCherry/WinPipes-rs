@@ -14,6 +14,26 @@ use windows::{
 };
 
 #[derive(Debug)]
+pub struct NamedPipeServerHandle(HANDLE);
+
+impl Deref for NamedPipeServerHandle {
+    type Target = HANDLE;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for NamedPipeServerHandle {
+    fn drop(&mut self) {
+        unsafe {
+            _ = DisconnectNamedPipe(self.0);
+            _ = CloseHandle(self.0);
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct NamedPipeClientHandle(HANDLE);
 
 impl Deref for NamedPipeClientHandle {
@@ -28,7 +48,6 @@ impl Drop for NamedPipeClientHandle {
     fn drop(&mut self) {
         unsafe {
             _ = DisconnectNamedPipe(self.0);
-            _ = CloseHandle(self.0);
         }
     }
 }

@@ -2,6 +2,7 @@ use std::{
     io::{Read, Write},
     mem,
     os::windows::prelude::{IntoRawHandle, RawHandle},
+    sync::Arc,
 };
 use std::{num::NonZeroU32, os::windows::prelude::AsRawHandle};
 
@@ -360,9 +361,17 @@ impl NamedPipeServer {
     pub fn connect(&self) -> Result<(ConnectedClientReader, ConnectedClientWriter), Error> {
         unsafe { ConnectNamedPipe(self.handle.0, None)? };
 
+        let dropper = Arc::new(NamedPipeClientHandle(self.handle.0));
+
         Ok((
-            ConnectedClientReader { server: self },
-            ConnectedClientWriter { server: self },
+            ConnectedClientReader {
+                server: self,
+                dropper: dropper.clone(),
+            },
+            ConnectedClientWriter {
+                server: self,
+                dropper,
+            },
         ))
     }
 
@@ -375,9 +384,17 @@ impl NamedPipeServer {
     ) -> Result<(ConnectedClientReader, ConnectedClientWriter), Error> {
         unsafe { ConnectNamedPipe(self.handle.0, Some(overlapped))? };
 
+        let dropper = Arc::new(NamedPipeClientHandle(self.handle.0));
+
         Ok((
-            ConnectedClientReader { server: self },
-            ConnectedClientWriter { server: self },
+            ConnectedClientReader {
+                server: self,
+                dropper: dropper.clone(),
+            },
+            ConnectedClientWriter {
+                server: self,
+                dropper,
+            },
         ))
     }
 
@@ -472,12 +489,16 @@ impl<'_ref> Iterator for ClientIterator<'_ref> {
                     }
                 }
             } else {
+                let dropper = Arc::new(NamedPipeClientHandle(self.server.handle.0));
+
                 return Some(Ok((
                     ConnectedClientReader {
                         server: self.server,
+                        dropper: dropper.clone(),
                     },
                     ConnectedClientWriter {
                         server: self.server,
+                        dropper,
                     },
                 )));
             }
@@ -495,6 +516,8 @@ impl<'_ref> Iterator for ClientIterator<'_ref> {
 #[derive(Debug)]
 pub struct ConnectedClientReader<'_ref> {
     server: &'_ref NamedPipeServer,
+    #[allow(unused)]
+    dropper: Arc<NamedPipeClientHandle>,
 }
 
 impl ConnectedClientReader<'_> {
@@ -587,6 +610,8 @@ impl Read for ConnectedClientReader<'_> {
 #[derive(Debug)]
 pub struct ConnectedClientWriter<'_ref> {
     server: &'_ref NamedPipeServer,
+    #[allow(unused)]
+    dropper: Arc<NamedPipeClientHandle>,
 }
 
 impl Write for ConnectedClientWriter<'_> {
