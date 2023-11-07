@@ -11,8 +11,9 @@ use windows::{
     core::{Error, PCWSTR},
     Win32::{
         Foundation::{
-            GetLastError, ERROR_BROKEN_PIPE, ERROR_NO_DATA, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
-            ERROR_PIPE_NOT_CONNECTED, HANDLE, INVALID_HANDLE_VALUE, STATUS_BUFFER_TOO_SMALL,
+            GetLastError, ERROR_BROKEN_PIPE, ERROR_MORE_DATA, ERROR_NO_DATA, ERROR_PIPE_BUSY,
+            ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, HANDLE, INVALID_HANDLE_VALUE,
+            STATUS_BUFFER_TOO_SMALL,
         },
         Security::SECURITY_ATTRIBUTES,
         Storage::FileSystem::{
@@ -552,32 +553,40 @@ impl ConnectedClientReader<'_> {
 
     /// Read full message/bytes into a vec
     pub fn read_full(&self) -> Result<Vec<u8>, Error> {
-        let (available_data, _) = self.available_bytes()?;
+        let buffer_size = self
+            .server
+            .options
+            .as_ref()
+            .map(|o| o.out_buffer_size)
+            .unwrap_or(1024);
 
-        if available_data == 0 {
-            return Err(STATUS_BUFFER_TOO_SMALL.into());
-        }
+        let mut buffer: Vec<u8> = Vec::with_capacity(buffer_size as usize);
 
-        let mut buffer: Vec<u8> = Vec::with_capacity(available_data as usize);
-
+        let mut buffer_to_read = buffer_size;
+        let mut buffer_ptr = 0;
         let mut read_bytes = 0;
 
-        let success = unsafe {
+        while unsafe {
             ReadFileSys(
                 self.server.handle.0 .0,
-                buffer.as_mut_ptr() as *mut _,
-                available_data,
+                buffer.as_mut_ptr().add(buffer_ptr) as *mut _,
+                buffer_to_read,
                 &mut read_bytes,
                 std::ptr::null_mut(),
-            ) != 0
-        };
+            ) == 0
+        } {
+            let err = unsafe { GetLastError().unwrap_err() };
+            if err.code() != ERROR_MORE_DATA.into() {
+                return Err(err);
+            }
 
-        if !success {
-            return Err(unsafe { GetLastError().unwrap_err() });
+            buffer_to_read = self.available_bytes()?.0;
+            buffer.reserve_exact(buffer_to_read as usize);
+            buffer_ptr += read_bytes as usize;
         }
 
         unsafe {
-            buffer.set_len(read_bytes as usize);
+            buffer.set_len(buffer_ptr + read_bytes as usize);
         }
 
         Ok(buffer)
