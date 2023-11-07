@@ -1,6 +1,7 @@
 use std::{
     io::{Read, Write},
     mem,
+    ops::Deref,
     os::windows::prelude::{AsRawHandle, IntoRawHandle, RawHandle},
     sync::Arc,
 };
@@ -8,7 +9,9 @@ use std::{
 use windows::{
     core::{Error, PCWSTR},
     Win32::{
-        Foundation::{GetLastError, GENERIC_READ, GENERIC_WRITE, STATUS_BUFFER_TOO_SMALL},
+        Foundation::{
+            CloseHandle, GetLastError, ERROR_MORE_DATA, GENERIC_READ, GENERIC_WRITE, HANDLE,
+        },
         Security::SECURITY_ATTRIBUTES,
         Storage::FileSystem::{
             CreateFileW, FlushFileBuffers, ReadFile, WriteFile, FILE_FLAGS_AND_ATTRIBUTES,
@@ -23,7 +26,26 @@ use windows::{
 };
 use windows_sys::Win32::Storage::FileSystem::ReadFile as ReadFileSys;
 
-use crate::{FullReader, FullReaderIterator, NamedPipeClientHandle};
+use crate::{FullReader, FullReaderIterator};
+
+#[derive(Debug)]
+pub struct NamedPipeClientHandle(HANDLE);
+
+impl Deref for NamedPipeClientHandle {
+    type Target = HANDLE;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for NamedPipeClientHandle {
+    fn drop(&mut self) {
+        unsafe {
+            _ = CloseHandle(self.0);
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct NamedPipeClientOptions {
@@ -33,6 +55,7 @@ pub struct NamedPipeClientOptions {
     collection_data_timeout: Option<u32>,
     file_flags: u32,
     max_collection_count: Option<u32>,
+    read_buffer_size: u32,
     security_attributes: Option<*const SECURITY_ATTRIBUTES>,
 }
 
@@ -70,6 +93,7 @@ impl NamedPipeClientOptions {
             file_flags: Default::default(),
             security_attributes: Default::default(),
             max_collection_count: Default::default(),
+            read_buffer_size: 1024,
         }
     }
 
@@ -166,6 +190,11 @@ impl NamedPipeClientOptions {
         self
     }
 
+    pub fn read_buffer_size(mut self, size: u32) -> Self {
+        self.read_buffer_size = size;
+        self
+    }
+
     pub fn create(self) -> Result<(NamedPipeClientReader, NamedPipeClientWriter), Error> {
         let handle = unsafe {
             CreateFileW(
@@ -191,14 +220,22 @@ impl NamedPipeClientOptions {
         let handle = Arc::new(NamedPipeClientHandle(handle));
 
         Ok((
-            NamedPipeClientReader(handle.clone()),
-            NamedPipeClientWriter(handle),
+            NamedPipeClientReader {
+                options: self.clone(),
+                handle: handle.clone(),
+            },
+            NamedPipeClientWriter {
+                handle: handle.clone(),
+            },
         ))
     }
 }
 
 #[derive(Debug)]
-pub struct NamedPipeClientReader(Arc<NamedPipeClientHandle>);
+pub struct NamedPipeClientReader {
+    options: NamedPipeClientOptions,
+    handle: Arc<NamedPipeClientHandle>,
+}
 
 impl NamedPipeClientReader {
     /// How many bytes are available to be read
@@ -213,7 +250,7 @@ impl NamedPipeClientReader {
 
         unsafe {
             PeekNamedPipe(
-                self.0 .0,
+                self.handle.0,
                 None,
                 0,
                 None,
@@ -232,32 +269,35 @@ impl NamedPipeClientReader {
 
     /// Read full message/bytes into a vec
     pub fn read_full(&self) -> Result<Vec<u8>, Error> {
-        let (available_data, _) = self.available_bytes()?;
+        let buffer_size = self.options.read_buffer_size;
 
-        if available_data == 0 {
-            return Err(STATUS_BUFFER_TOO_SMALL.into());
-        }
+        let mut buffer: Vec<u8> = Vec::with_capacity(buffer_size as usize);
 
-        let mut buffer: Vec<u8> = Vec::with_capacity(available_data as usize);
-
+        let mut buffer_to_read = buffer_size;
+        let mut buffer_ptr = 0;
         let mut read_bytes = 0;
 
-        let success = unsafe {
+        while unsafe {
             ReadFileSys(
-                self.0 .0 .0,
-                buffer.as_mut_ptr() as *mut _,
-                available_data,
+                self.handle.0 .0,
+                buffer.as_mut_ptr().add(buffer_ptr) as *mut _,
+                buffer_to_read,
                 &mut read_bytes,
                 std::ptr::null_mut(),
-            ) != 0
-        };
+            ) == 0
+        } {
+            let err = unsafe { GetLastError().unwrap_err() };
+            if err.code() != ERROR_MORE_DATA.into() {
+                return Err(err);
+            }
 
-        if !success {
-            return Err(unsafe { GetLastError().unwrap_err() });
+            buffer_to_read = self.available_bytes()?.0;
+            buffer.reserve_exact(buffer_to_read as usize);
+            buffer_ptr += read_bytes as usize;
         }
 
         unsafe {
-            buffer.set_len(read_bytes as usize);
+            buffer.set_len(buffer_ptr + read_bytes as usize);
         }
 
         Ok(buffer)
@@ -275,7 +315,7 @@ impl Read for NamedPipeClientReader {
         let mut bytes_read = 0;
 
         unsafe {
-            ReadFile(**self.0, Some(buf), Some(&mut bytes_read), None)?;
+            ReadFile(**self.handle, Some(buf), Some(&mut bytes_read), None)?;
         }
 
         Ok(bytes_read as usize)
@@ -285,7 +325,7 @@ impl Read for NamedPipeClientReader {
 /// This is only okay to call if the NamedPipeClientWriter has already been dropped!
 impl IntoRawHandle for NamedPipeClientReader {
     fn into_raw_handle(self) -> RawHandle {
-        let handle = Arc::into_inner(self.0)
+        let handle = Arc::into_inner(self.handle)
             .expect("can't consume handle because NamedPipeClientWriter is alive");
 
         let raw_handle = handle.0;
@@ -300,19 +340,21 @@ impl IntoRawHandle for NamedPipeClientReader {
 
 impl AsRawHandle for NamedPipeClientReader {
     fn as_raw_handle(&self) -> RawHandle {
-        (**self.0).0 as *mut _
+        (**self.handle).0 as *mut _
     }
 }
 
 #[derive(Debug)]
-pub struct NamedPipeClientWriter(Arc<NamedPipeClientHandle>);
+pub struct NamedPipeClientWriter {
+    handle: Arc<NamedPipeClientHandle>,
+}
 
 impl Write for NamedPipeClientWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let mut bytes_written = 0;
 
         unsafe {
-            WriteFile(**self.0, Some(buf), Some(&mut bytes_written), None)?;
+            WriteFile(**self.handle, Some(buf), Some(&mut bytes_written), None)?;
         }
 
         Ok(bytes_written as usize)
@@ -320,7 +362,7 @@ impl Write for NamedPipeClientWriter {
 
     fn flush(&mut self) -> std::io::Result<()> {
         unsafe {
-            FlushFileBuffers(**self.0)?;
+            FlushFileBuffers(**self.handle)?;
         }
 
         Ok(())
@@ -330,7 +372,7 @@ impl Write for NamedPipeClientWriter {
 /// This is only okay to call if the NamedPipeClientReader has already been dropped!
 impl IntoRawHandle for NamedPipeClientWriter {
     fn into_raw_handle(self) -> RawHandle {
-        let handle = Arc::into_inner(self.0)
+        let handle = Arc::into_inner(self.handle)
             .expect("can't consume handle because NamedPipeClientReader is alive");
 
         let raw_handle = handle.0;
@@ -345,6 +387,6 @@ impl IntoRawHandle for NamedPipeClientWriter {
 
 impl AsRawHandle for NamedPipeClientWriter {
     fn as_raw_handle(&self) -> RawHandle {
-        (**self.0).0 as *mut _
+        (**self.handle).0 as *mut _
     }
 }

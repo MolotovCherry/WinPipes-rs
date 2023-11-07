@@ -1,6 +1,7 @@
 use std::{
     io::{Read, Write},
     mem,
+    ops::Deref,
     os::windows::prelude::{IntoRawHandle, RawHandle},
     sync::Arc,
 };
@@ -11,9 +12,9 @@ use windows::{
     core::{Error, PCWSTR},
     Win32::{
         Foundation::{
-            GetLastError, ERROR_BROKEN_PIPE, ERROR_MORE_DATA, ERROR_NO_DATA, ERROR_PIPE_BUSY,
-            ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, HANDLE, INVALID_HANDLE_VALUE,
-            STATUS_BUFFER_TOO_SMALL,
+            CloseHandle, GetLastError, ERROR_BROKEN_PIPE, ERROR_MORE_DATA, ERROR_NO_DATA,
+            ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, HANDLE,
+            INVALID_HANDLE_VALUE,
         },
         Security::SECURITY_ATTRIBUTES,
         Storage::FileSystem::{
@@ -35,7 +36,46 @@ use windows::{
 };
 use windows_sys::Win32::Storage::FileSystem::ReadFile as ReadFileSys;
 
-use crate::{FullReader, FullReaderIterator, NamedPipeClientHandle};
+use crate::{FullReader, FullReaderIterator};
+
+#[derive(Debug)]
+pub struct NamedPipeServerHandle(HANDLE);
+
+impl Deref for NamedPipeServerHandle {
+    type Target = HANDLE;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for NamedPipeServerHandle {
+    fn drop(&mut self) {
+        unsafe {
+            _ = DisconnectNamedPipe(self.0);
+            _ = CloseHandle(self.0);
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct NamedPipeServerClientHandle(HANDLE);
+
+impl Deref for NamedPipeServerClientHandle {
+    type Target = HANDLE;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for NamedPipeServerClientHandle {
+    fn drop(&mut self) {
+        unsafe {
+            _ = DisconnectNamedPipe(self.0);
+        }
+    }
+}
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 enum PipeReadMode {
@@ -333,7 +373,7 @@ impl NamedPipeServerOptions {
 
         Ok(NamedPipeServer {
             options: Some(self.clone()),
-            handle: NamedPipeClientHandle(handle),
+            handle: NamedPipeServerClientHandle(handle),
         })
     }
 }
@@ -341,7 +381,7 @@ impl NamedPipeServerOptions {
 #[derive(Debug)]
 pub struct NamedPipeServer {
     options: Option<NamedPipeServerOptions>,
-    handle: NamedPipeClientHandle,
+    handle: NamedPipeServerClientHandle,
 }
 
 impl NamedPipeServer {
@@ -352,7 +392,7 @@ impl NamedPipeServer {
     pub unsafe fn from_raw_handle(handle: RawHandle, options: NamedPipeServerOptions) -> Self {
         Self {
             options: Some(options),
-            handle: NamedPipeClientHandle(HANDLE(handle as isize)),
+            handle: NamedPipeServerClientHandle(HANDLE(handle as isize)),
         }
     }
 
@@ -362,7 +402,7 @@ impl NamedPipeServer {
     pub fn connect(&self) -> Result<(ConnectedClientReader, ConnectedClientWriter), Error> {
         unsafe { ConnectNamedPipe(self.handle.0, None)? };
 
-        let dropper = Arc::new(NamedPipeClientHandle(self.handle.0));
+        let dropper = Arc::new(NamedPipeServerClientHandle(self.handle.0));
 
         Ok((
             ConnectedClientReader {
@@ -385,7 +425,7 @@ impl NamedPipeServer {
     ) -> Result<(ConnectedClientReader, ConnectedClientWriter), Error> {
         unsafe { ConnectNamedPipe(self.handle.0, Some(overlapped))? };
 
-        let dropper = Arc::new(NamedPipeClientHandle(self.handle.0));
+        let dropper = Arc::new(NamedPipeServerClientHandle(self.handle.0));
 
         Ok((
             ConnectedClientReader {
@@ -490,7 +530,7 @@ impl<'_ref> Iterator for ClientIterator<'_ref> {
                     }
                 }
             } else {
-                let dropper = Arc::new(NamedPipeClientHandle(self.server.handle.0));
+                let dropper = Arc::new(NamedPipeServerClientHandle(self.server.handle.0));
 
                 return Some(Ok((
                     ConnectedClientReader {
@@ -518,7 +558,7 @@ impl<'_ref> Iterator for ClientIterator<'_ref> {
 pub struct ConnectedClientReader<'_ref> {
     server: &'_ref NamedPipeServer,
     #[allow(unused)]
-    dropper: Arc<NamedPipeClientHandle>,
+    dropper: Arc<NamedPipeServerClientHandle>,
 }
 
 impl ConnectedClientReader<'_> {
@@ -620,7 +660,7 @@ impl Read for ConnectedClientReader<'_> {
 pub struct ConnectedClientWriter<'_ref> {
     server: &'_ref NamedPipeServer,
     #[allow(unused)]
-    dropper: Arc<NamedPipeClientHandle>,
+    dropper: Arc<NamedPipeServerClientHandle>,
 }
 
 impl Write for ConnectedClientWriter<'_> {
