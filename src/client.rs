@@ -301,11 +301,12 @@ impl NamedPipeClientReader {
             }
 
             let err = unsafe { GetLastError().unwrap_err() };
-            if err.code() == ERROR_MORE_DATA.into() {
-                // The read succeeded, but this message has more data
-            } else {
+            if err.code() != ERROR_MORE_DATA.into() {
+                // An error occurred during reading
                 return Err(err);
             }
+
+            // Read succeeded, but this message has more data
         }
     }
 }
