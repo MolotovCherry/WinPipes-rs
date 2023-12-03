@@ -191,6 +191,7 @@ impl NamedPipeClientOptions {
     }
 
     pub fn read_buffer_size(mut self, size: u32) -> Self {
+        assert!(size > 0, "size must be > 0");
         self.read_buffer_size = size;
         self
     }
@@ -269,38 +270,44 @@ impl NamedPipeClientReader {
 
     /// Read full message/bytes into a vec
     pub fn read_full(&self) -> Result<Vec<u8>, Error> {
-        let buffer_size = self.options.read_buffer_size;
+        let buffer_size = self.options.read_buffer_size as usize;
 
-        let mut buffer: Vec<u8> = Vec::with_capacity(buffer_size as usize);
+        let mut buffer = Vec::new();
+        let mut total_read_bytes = 0;
 
-        let mut buffer_to_read = buffer_size;
-        let mut buffer_ptr = 0;
-        let mut read_bytes = 0;
+        loop {
+            let old_buffer_size = buffer.len();
+            let new_buffer_size = old_buffer_size + buffer_size;
+            buffer.resize(new_buffer_size, 0);
 
-        while unsafe {
-            ReadFileSys(
-                self.handle.0 .0,
-                buffer.as_mut_ptr().add(buffer_ptr) as *mut _,
-                buffer_to_read,
-                &mut read_bytes,
-                std::ptr::null_mut(),
-            ) == 0
-        } {
+            let buffer_end = &mut buffer[old_buffer_size..];
+            let mut read_bytes = 0;
+            let result = unsafe {
+                ReadFileSys(
+                    self.handle.0 .0,
+                    buffer_end.as_mut_ptr(),
+                    buffer_end.len() as u32,
+                    &mut read_bytes,
+                    std::ptr::null_mut(),
+                )
+            };
+
+            total_read_bytes += read_bytes as usize;
+
+            if result != 0 {
+                // Read was successful
+                buffer.resize(total_read_bytes, 0);
+                return Ok(buffer);
+            }
+
             let err = unsafe { GetLastError().unwrap_err() };
             if err.code() != ERROR_MORE_DATA.into() {
+                // An error occurred during reading
                 return Err(err);
             }
 
-            buffer_to_read = self.available_bytes()?.0;
-            buffer.reserve_exact(buffer_to_read as usize);
-            buffer_ptr += read_bytes as usize;
+            // Read succeeded, but this message has more data
         }
-
-        unsafe {
-            buffer.set_len(buffer_ptr + read_bytes as usize);
-        }
-
-        Ok(buffer)
     }
 }
 
