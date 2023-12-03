@@ -191,6 +191,7 @@ impl NamedPipeClientOptions {
     }
 
     pub fn read_buffer_size(mut self, size: u32) -> Self {
+        assert!(size > 0, "size must be > 0");
         self.read_buffer_size = size;
         self
     }
@@ -269,7 +270,7 @@ impl NamedPipeClientReader {
 
     /// Read full message/bytes into a vec
     pub fn read_full(&self) -> Result<Vec<u8>, Error> {
-        let buffer_size = std::cmp::max(self.options.read_buffer_size as usize, 1);
+        let buffer_size = self.options.read_buffer_size as usize;
 
         let mut buffer = Vec::new();
         let mut total_read_bytes = 0;
