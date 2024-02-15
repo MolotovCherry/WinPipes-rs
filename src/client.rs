@@ -59,6 +59,9 @@ pub struct NamedPipeClientOptions {
     security_attributes: Option<*const SECURITY_ATTRIBUTES>,
 }
 
+unsafe impl Send for NamedPipeClientOptions {}
+unsafe impl Sync for NamedPipeClientOptions {}
+
 impl NamedPipeClientOptions {
     /// Create a new named pipe client options
     ///
