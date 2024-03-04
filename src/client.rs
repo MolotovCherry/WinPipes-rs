@@ -303,10 +303,10 @@ impl NamedPipeClientReader {
                 return Ok(buffer);
             }
 
-            let err = unsafe { GetLastError().unwrap_err() };
-            if err.code() != ERROR_MORE_DATA.into() {
+            let err = unsafe { GetLastError() };
+            if err.is_err() && err != ERROR_MORE_DATA {
                 // An error occurred during reading
-                return Err(err);
+                return Err(err.into());
             }
 
             // Read succeeded, but this message has more data
