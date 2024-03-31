@@ -422,11 +422,17 @@ impl NamedPipeServer {
 
         Ok((
             ConnectedClientReader {
-                server: self,
+                server: Self {
+                    options: self.options.clone(),
+                    handle: self.handle.clone(),
+                },
                 dropper: dropper.clone(),
             },
             ConnectedClientWriter {
-                server: self,
+                server: Self {
+                    options: self.options.clone(),
+                    handle: self.handle.clone(),
+                },
                 dropper,
             },
         ))
@@ -450,11 +456,17 @@ impl NamedPipeServer {
 
         Ok((
             ConnectedClientReader {
-                server: self,
+                server: Self {
+                    options: self.options.clone(),
+                    handle: self.handle.clone(),
+                },
                 dropper: dropper.clone(),
             },
             ConnectedClientWriter {
-                server: self,
+                server: Self {
+                    options: self.options.clone(),
+                    handle: self.handle.clone(),
+                },
                 dropper,
             },
         ))
@@ -496,25 +508,30 @@ impl AsRawHandle for NamedPipeServer {
     }
 }
 
-impl<'_ref> IntoIterator for &'_ref NamedPipeServer {
-    type Item = Result<(ConnectedClientReader<'_ref>, ConnectedClientWriter<'_ref>), u32>;
+impl IntoIterator for &NamedPipeServer {
+    type Item = Result<(ConnectedClientReader, ConnectedClientWriter), u32>;
 
-    type IntoIter = ClientIterator<'_ref>;
+    type IntoIter = ClientIterator;
 
     fn into_iter(self) -> Self::IntoIter {
-        ClientIterator { server: self }
+        ClientIterator {
+            server: NamedPipeServer {
+                options: self.options.clone(),
+                handle: self.handle.clone(),
+            },
+        }
     }
 }
 
 #[derive(Debug)]
-pub struct ClientIterator<'_ref> {
-    server: &'_ref NamedPipeServer,
+pub struct ClientIterator {
+    server: NamedPipeServer,
 }
 
 /// Note that the error variant is NOT an error in the sense of you cannot continue. You should just `continue` on it
 /// if there's a real error that cannot be continued on, the iterator will return None instead
-impl<'_ref> Iterator for ClientIterator<'_ref> {
-    type Item = Result<(ConnectedClientReader<'_ref>, ConnectedClientWriter<'_ref>), u32>;
+impl Iterator for ClientIterator {
+    type Item = Result<(ConnectedClientReader, ConnectedClientWriter), u32>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let connect = self.server.connect();
@@ -555,11 +572,17 @@ impl<'_ref> Iterator for ClientIterator<'_ref> {
 
                 return Some(Ok((
                     ConnectedClientReader {
-                        server: self.server,
+                        server: NamedPipeServer {
+                            options: self.server.options.clone(),
+                            handle: self.server.handle.clone(),
+                        },
                         dropper: dropper.clone(),
                     },
                     ConnectedClientWriter {
-                        server: self.server,
+                        server: NamedPipeServer {
+                            options: self.server.options.clone(),
+                            handle: self.server.handle.clone(),
+                        },
                         dropper,
                     },
                 )));
@@ -576,13 +599,13 @@ impl<'_ref> Iterator for ClientIterator<'_ref> {
 /// That's because it only lives as long as the server lives
 /// So this is for type checking purposes
 #[derive(Debug)]
-pub struct ConnectedClientReader<'_ref> {
-    server: &'_ref NamedPipeServer,
+pub struct ConnectedClientReader {
+    server: NamedPipeServer,
     #[allow(unused)]
     dropper: Arc<NamedPipeServerClientHandle>,
 }
 
-impl ConnectedClientReader<'_> {
+impl ConnectedClientReader {
     /// How many bytes are available to be read
     ///
     /// Returns (A, L)
@@ -660,13 +683,13 @@ impl ConnectedClientReader<'_> {
     }
 }
 
-impl FullReader for ConnectedClientReader<'_> {
+impl FullReader for ConnectedClientReader {
     fn read_full(&self) -> Result<Vec<u8>, Error> {
         self.read_full()
     }
 }
 
-impl Read for ConnectedClientReader<'_> {
+impl Read for ConnectedClientReader {
     /// Read into a buffer, returning how many bytes were read into it
     /// see: https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -684,13 +707,13 @@ impl Read for ConnectedClientReader<'_> {
 /// That's because it only lives as long as the server lives
 /// So this is for type checking purposes
 #[derive(Debug)]
-pub struct ConnectedClientWriter<'_ref> {
-    server: &'_ref NamedPipeServer,
+pub struct ConnectedClientWriter {
+    server: NamedPipeServer,
     #[allow(unused)]
     dropper: Arc<NamedPipeServerClientHandle>,
 }
 
-impl Write for ConnectedClientWriter<'_> {
+impl Write for ConnectedClientWriter {
     /// Write into a buffer, returning how many bytes were read into it
     /// see: https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-writefile
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
