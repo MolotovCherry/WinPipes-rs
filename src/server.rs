@@ -598,7 +598,7 @@ impl Iterator for ClientIterator {
 /// Why borrow handle when it's Copy?
 /// That's because it only lives as long as the server lives
 /// So this is for type checking purposes
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ConnectedClientReader {
     server: NamedPipeServer,
     #[allow(unused)]
@@ -706,7 +706,7 @@ impl Read for ConnectedClientReader {
 /// Why borrow handle when it's Copy?
 /// That's because it only lives as long as the server lives
 /// So this is for type checking purposes
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ConnectedClientWriter {
     server: NamedPipeServer,
     #[allow(unused)]
