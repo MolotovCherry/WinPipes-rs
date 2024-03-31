@@ -16,7 +16,7 @@ use windows::{
             ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, HANDLE,
             INVALID_HANDLE_VALUE,
         },
-        Security::SECURITY_ATTRIBUTES,
+        Security::{RevertToSelf, SECURITY_ATTRIBUTES},
         Storage::FileSystem::{
             FlushFileBuffers, ReadFile, WriteFile, FILE_FLAGS_AND_ATTRIBUTES,
             FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, FILE_FLAG_WRITE_THROUGH,
@@ -24,10 +24,10 @@ use windows::{
         },
         System::{
             Pipes::{
-                ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PeekNamedPipe,
-                NAMED_PIPE_MODE, PIPE_ACCEPT_REMOTE_CLIENTS, PIPE_NOWAIT, PIPE_READMODE_BYTE,
-                PIPE_READMODE_MESSAGE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
-                PIPE_TYPE_MESSAGE, PIPE_WAIT,
+                ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe,
+                ImpersonateNamedPipeClient, PeekNamedPipe, NAMED_PIPE_MODE,
+                PIPE_ACCEPT_REMOTE_CLIENTS, PIPE_NOWAIT, PIPE_READMODE_BYTE, PIPE_READMODE_MESSAGE,
+                PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_TYPE_MESSAGE, PIPE_WAIT,
             },
             SystemServices::ACCESS_SYSTEM_SECURITY,
             IO::OVERLAPPED,
@@ -101,6 +101,7 @@ pub struct NamedPipeServerOptions {
     read_mode: PipeReadMode,
     write_mode: PipeWriteMode,
     security_attributes: Option<*const SECURITY_ATTRIBUTES>,
+    impersonate: bool,
 }
 
 unsafe impl Sync for NamedPipeServerOptions {}
@@ -147,6 +148,7 @@ impl NamedPipeServerOptions {
             security_attributes: Default::default(),
             read_mode: PipeReadMode::ReadByte,
             write_mode: PipeWriteMode::WriteByte,
+            impersonate: false,
         }
     }
 
@@ -333,6 +335,12 @@ impl NamedPipeServerOptions {
         self
     }
 
+    /// The ImpersonateNamedPipeClient function impersonates a named-pipe client application.
+    pub fn impersonate(mut self) -> Self {
+        self.impersonate = true;
+        self
+    }
+
     /// The default time-out value, in milliseconds, if the WaitNamedPipe function specifies NMPWAIT_USE_DEFAULT_WAIT.
     /// Each instance of a named pipe must specify the same value.
     ///
@@ -371,6 +379,12 @@ impl NamedPipeServerOptions {
         if handle == INVALID_HANDLE_VALUE {
             let err = unsafe { GetLastError() };
             return Err(err.into());
+        }
+
+        if self.impersonate {
+            unsafe {
+                ImpersonateNamedPipeClient(handle)?;
+            }
         }
 
         Ok(NamedPipeServer {
@@ -416,6 +430,11 @@ impl NamedPipeServer {
                 dropper,
             },
         ))
+    }
+
+    /// The RevertToSelf function terminates the impersonation of a client application.
+    pub fn revert_to_self(&self) -> Result<(), Error> {
+        unsafe { RevertToSelf() }
     }
 
     /// Async version
