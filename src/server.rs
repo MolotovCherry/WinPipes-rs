@@ -58,7 +58,7 @@ impl Drop for NamedPipeServerHandle {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NamedPipeServerClientHandle(HANDLE);
 
 impl Deref for NamedPipeServerClientHandle {
@@ -394,7 +394,7 @@ impl NamedPipeServerOptions {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NamedPipeServer {
     options: Option<NamedPipeServerOptions>,
     handle: NamedPipeServerClientHandle,
