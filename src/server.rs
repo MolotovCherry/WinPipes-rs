@@ -389,7 +389,7 @@ impl NamedPipeServerOptions {
 
         Ok(NamedPipeServer {
             options: Some(self.clone()),
-            handle: NamedPipeServerClientHandle(handle),
+            handle: Arc::new(NamedPipeServerHandle(handle)),
         })
     }
 }
@@ -397,7 +397,7 @@ impl NamedPipeServerOptions {
 #[derive(Debug, Clone)]
 pub struct NamedPipeServer {
     options: Option<NamedPipeServerOptions>,
-    handle: NamedPipeServerClientHandle,
+    handle: Arc<NamedPipeServerHandle>,
 }
 
 impl NamedPipeServer {
@@ -408,7 +408,7 @@ impl NamedPipeServer {
     pub unsafe fn from_raw_handle(handle: RawHandle, options: NamedPipeServerOptions) -> Self {
         Self {
             options: Some(options),
-            handle: NamedPipeServerClientHandle(HANDLE(handle as isize)),
+            handle: Arc::new(NamedPipeServerHandle(HANDLE(handle as isize))),
         }
     }
 
@@ -418,22 +418,16 @@ impl NamedPipeServer {
     pub fn connect(&self) -> Result<(ConnectedClientReader, ConnectedClientWriter), Error> {
         unsafe { ConnectNamedPipe(self.handle.0, None)? };
 
-        let dropper = Arc::new(NamedPipeServerClientHandle(self.handle.0));
+        let _dropper = Arc::new(NamedPipeServerClientHandle(self.handle.0));
 
         Ok((
             ConnectedClientReader {
-                server: Self {
-                    options: self.options.clone(),
-                    handle: self.handle.clone(),
-                },
-                dropper: dropper.clone(),
+                server: self.clone(),
+                _dropper: _dropper.clone(),
             },
             ConnectedClientWriter {
-                server: Self {
-                    options: self.options.clone(),
-                    handle: self.handle.clone(),
-                },
-                dropper,
+                server: self.clone(),
+                _dropper,
             },
         ))
     }
@@ -452,22 +446,16 @@ impl NamedPipeServer {
     ) -> Result<(ConnectedClientReader, ConnectedClientWriter), Error> {
         unsafe { ConnectNamedPipe(self.handle.0, Some(overlapped))? };
 
-        let dropper = Arc::new(NamedPipeServerClientHandle(self.handle.0));
+        let _dropper = Arc::new(NamedPipeServerClientHandle(self.handle.0));
 
         Ok((
             ConnectedClientReader {
-                server: Self {
-                    options: self.options.clone(),
-                    handle: self.handle.clone(),
-                },
-                dropper: dropper.clone(),
+                server: self.clone(),
+                _dropper: _dropper.clone(),
             },
             ConnectedClientWriter {
-                server: Self {
-                    options: self.options.clone(),
-                    handle: self.handle.clone(),
-                },
-                dropper,
+                server: self.clone(),
+                _dropper,
             },
         ))
     }
@@ -568,7 +556,7 @@ impl Iterator for ClientIterator {
                     }
                 }
             } else {
-                let dropper = Arc::new(NamedPipeServerClientHandle(self.server.handle.0));
+                let _dropper = Arc::new(NamedPipeServerClientHandle(self.server.handle.0));
 
                 return Some(Ok((
                     ConnectedClientReader {
@@ -576,14 +564,14 @@ impl Iterator for ClientIterator {
                             options: self.server.options.clone(),
                             handle: self.server.handle.clone(),
                         },
-                        dropper: dropper.clone(),
+                        _dropper: _dropper.clone(),
                     },
                     ConnectedClientWriter {
                         server: NamedPipeServer {
                             options: self.server.options.clone(),
                             handle: self.server.handle.clone(),
                         },
-                        dropper,
+                        _dropper,
                     },
                 )));
             }
@@ -594,15 +582,10 @@ impl Iterator for ClientIterator {
 }
 
 /// Represents a connected client
-///
-/// Why borrow handle when it's Copy?
-/// That's because it only lives as long as the server lives
-/// So this is for type checking purposes
 #[derive(Debug, Clone)]
 pub struct ConnectedClientReader {
     server: NamedPipeServer,
-    #[allow(unused)]
-    dropper: Arc<NamedPipeServerClientHandle>,
+    _dropper: Arc<NamedPipeServerClientHandle>,
 }
 
 impl ConnectedClientReader {
@@ -702,15 +685,10 @@ impl Read for ConnectedClientReader {
 }
 
 /// Represents the write portion of a connected client
-///
-/// Why borrow handle when it's Copy?
-/// That's because it only lives as long as the server lives
-/// So this is for type checking purposes
 #[derive(Debug, Clone)]
 pub struct ConnectedClientWriter {
     server: NamedPipeServer,
-    #[allow(unused)]
-    dropper: Arc<NamedPipeServerClientHandle>,
+    _dropper: Arc<NamedPipeServerClientHandle>,
 }
 
 impl Write for ConnectedClientWriter {
