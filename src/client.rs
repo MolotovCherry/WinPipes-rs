@@ -235,7 +235,7 @@ impl NamedPipeClientOptions {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NamedPipeClientReader {
     options: NamedPipeClientOptions,
     handle: Arc<NamedPipeClientHandle>,
@@ -354,7 +354,7 @@ impl AsRawHandle for NamedPipeClientReader {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NamedPipeClientWriter {
     handle: Arc<NamedPipeClientHandle>,
 }
